@@ -1,0 +1,29 @@
+name: 打包安卓APK
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt update
+          sudo apt install -y openjdk-17-jdk git zip unzip build-essential libssl-dev zlib1g-dev
+
+      - name: 安装Buildozer
+        run: pip install buildozer cython
+
+      - name: 执行打包
+        run: buildozer android debug
+
+      - name: 上传APK产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: 亲情通话APK
+          path: bin/*.apk
