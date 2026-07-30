@@ -13,15 +13,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Cache Buildozer dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            ~/.cache/pip
+          key: buildozer-stable-v1-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-stable-v1-
+
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq openjdk-17-jdk git zip unzip build-essential libssl-dev zlib1g-dev python3-pip python3-dev
+          sudo apt-get install -y -qq openjdk-17-jdk git zip unzip build-essential libssl-dev zlib1g-dev python3-pip python3-dev autoconf libtool pkg-config libncurses5-dev libncursesw5-dev
 
-      - name: Install buildozer
+      - name: Install buildozer stack
         run: |
           python3 -m pip install --upgrade pip
-          pip install buildozer cython==0.29.37
+          pip install buildozer==1.5.0 cython==0.29.37 python-for-android==2023.9.16
 
       - name: Build APK
         run: yes | buildozer android debug
