@@ -13,7 +13,6 @@ fullscreen = 0
 android.icon = icon.png
 android.archs = arm64-v8a, armeabi-v7a
 android.api = 33
-android.ndk = 25b
 android.minapi = 21
 
 # 全部所需权限
