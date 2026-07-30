@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-      ANDROID_HOME: /home/runner/.buildozer/android/platform/android-sdk
+      ANDROID_HOME: /home/runner/android-sdk
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -17,20 +17,29 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq openjdk-17-jdk git zip unzip build-essential libssl-dev zlib1g-dev python3-pip python3-dev autoconf libtool pkg-config libncurses5-dev libncursesw5-dev libffi-dev libsqlite3-dev wget curl
+          sudo apt-get install -y openjdk-17-jdk git zip unzip build-essential libssl-dev zlib1g-dev python3-pip python3-dev autoconf libtool pkg-config wget curl
 
-      - name: Install build toolchain
+      - name: Manually install Android SDK command line tools
         run: |
-          python3 -m pip install --upgrade pip setuptools wheel
-          pip install buildozer==1.5.0 cython==0.29.37 python-for-android==2023.9.16
-
-      # 关键：预先写入SDK许可证，避免交互式y/n确认
-      - name: Pre create SDK license
-        run: |
+          mkdir -p ${ANDROID_HOME}
+          cd ${ANDROID_HOME}
+          wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+          unzip commandlinetools-linux-9477386_latest.zip
+          mv cmdline-tools latest
+          mkdir cmdline-tools
+          mv latest cmdline-tools/
+          export PATH=${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH
+          # 写入许可证
           mkdir -p ${ANDROID_HOME}/licenses
           echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ${ANDROID_HOME}/licenses/android-sdk-license
           echo "84831b9409646a918e30573bab4c9c91346d8abd" > ${ANDROID_HOME}/licenses/android-sdk-preview-license
-          echo "d975f601f89fbc905c13980a32c11c1947dc8a9f" > ${ANDROID_HOME}/licenses/android-googletv-license
+          # 预安装构建工具
+          sdkmanager "build-tools;37.0.0" "platforms;android-31"
+
+      - name: Install buildozer
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install buildozer==1.5.0 cython==0.29.37 python-for-android==2023.9.16
 
       - name: Build APK
         run: buildozer android debug
