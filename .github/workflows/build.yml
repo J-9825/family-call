@@ -9,72 +9,99 @@ jobs:
   build-apk:
     runs-on: ubuntu-22.04
     env:
-      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      # Keep a default but we'll set/update JAVA via setup-java action below
       ANDROID_HOME: /home/runner/.buildozer/android/platform/android-sdk
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Java (Temurin 11)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            openjdk-17-jdk git zip unzip build-essential \
+            openjdk-11-jdk git zip unzip build-essential \
             libssl-dev zlib1g-dev python3-pip python3-dev \
             autoconf libtool pkg-config libncurses5-dev libncursesw5-dev \
             libffi-dev wget curl ant
 
-      - name: Create Android SDK dir
+      - name: Create Android SDK dir (temp)
         run: |
-          mkdir -p "$ANDROID_HOME"
+          mkdir -p "${{ runner.temp }}/android-sdk"
 
       - name: Install Android cmdline-tools and SDK packages
         env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
         run: |
-          set -e
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT}"
+          mkdir -p "$SDK_ROOT"
           cd /tmp
           # Download command line tools (update URL if Google changes it)
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip -d "$ANDROID_HOME"
+          unzip -q cmdline-tools.zip -d "$SDK_ROOT"
+          rm cmdline-tools.zip
           # Normalize layout to cmdline-tools/latest
-          mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
-          # Some zips put a 'cmdline-tools' dir containing subdirs; move safely
-          if [ -d "$ANDROID_HOME/cmdline-tools" ]; then
-            # Move everything under cmdline-tools into cmdline-tools/latest (works if zip created a subdir)
-            mv "$ANDROID_HOME"/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/" || true
+          mkdir -p "$SDK_ROOT/cmdline-tools/latest"
+          if [ -d "$SDK_ROOT/cmdline-tools" ]; then
+            # Move contents if zip expanded into cmdline-tools/
+            mv "$SDK_ROOT/cmdline-tools"/* "$SDK_ROOT/cmdline-tools/latest/" || true
           fi
-          # Create a tools/bin symlink so older callers can find sdkmanager at $ANDROID_HOME/tools/bin/sdkmanager
-          mkdir -p "$ANDROID_HOME/tools"
-          ln -s "$ANDROID_HOME/cmdline-tools/latest/bin" "$ANDROID_HOME/tools/bin" || true
-          # Make sdkmanager invocations explicit (PATH update for subsequent steps)
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-          # Accept licenses and install essential packages (use explicit path to sdkmanager)
-          export SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-31" "build-tools;33.0.2" "cmdline-tools;latest"
+          # Provide old path fallback (tools/bin) used by some scripts
+          mkdir -p "$SDK_ROOT/tools"
+          ln -sfn "$SDK_ROOT/cmdline-tools/latest" "$SDK_ROOT/tools/bin" || true
+          # Add to PATH for this step (and later export to GITHUB_PATH)
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          # Accept licenses and install essential packages
+          export SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          # ensure sdkmanager is executable
+          chmod +x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platform-tools" "platforms;android-33" "build-tools;33.0.2" "cmdline-tools;latest"
 
-      - name: Install build toolchain (pip)
+      - name: Export Android env vars for Buildozer
         run: |
-          python3 -m pip install --upgrade pip setuptools wheel
-          # pin sh < 2.0 to satisfy python-for-android 2023.9.16 requirement
-          python3 -m pip install 'sh<2.0,>=1.10'
-          python3 -m pip install buildozer==1.5.0 cython==0.29.37 python-for-android==2023.9.16
+          echo "ANDROID_SDK_ROOT=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_HOME=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
+          echo "PATH=${{ runner.temp }}/android-sdk/cmdline-tools/latest/bin:${{ runner.temp }}/android-sdk/platform-tools:${PATH}" >> $GITHUB_ENV
+
+      - name: Set up Python virtualenv and install build tools
+        run: |
+          python3 -m venv $HOME/venv
+          source $HOME/venv/bin/activate
+          python -m pip install --upgrade pip setuptools wheel
+          # Pin sh <2.0 to satisfy python-for-android 2023.9.16
+          pip install 'sh<2.0,>=1.10'
+          pip install buildozer==1.5.0 cython==0.29.37 python-for-android==2023.9.16
+        shell: bash
+
+      - name: Add venv to PATH
+        run: echo "$HOME/venv/bin" >> $GITHUB_PATH
 
       - name: Pre-accept SDK licenses (fallback)
         run: |
-          mkdir -p "$ANDROID_HOME/licenses"
-          echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
-          echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
+          mkdir -p "${{ runner.temp }}/android-sdk/licenses"
+          echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "${{ runner.temp }}/android-sdk/licenses/android-sdk-license"
+          echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > "${{ runner.temp }}/android-sdk/licenses/android-sdk-preview-license"
 
-      - name: Build APK
+      - name: Build APK (using venv buildozer)
         env:
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+          ANDROID_HOME: ${{ runner.temp }}/android-sdk
         run: |
-          # Ensure ANDROID_SDK_ROOT is set for Buildozer
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          set -euo pipefail
+          source $HOME/venv/bin/activate
+          # Ensure Buildozer uses the prepared SDK
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT}"
+          export ANDROID_HOME="${ANDROID_HOME}"
+          # Run buildozer from venv
           buildozer android debug
 
       - name: Upload APK
