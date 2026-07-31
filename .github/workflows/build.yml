@@ -1,4 +1,5 @@
 name: Build Android APK
+
 on:
   push:
     branches: [ main ]
@@ -10,6 +11,7 @@ jobs:
     env:
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       ANDROID_HOME: /home/runner/.buildozer/android/platform/android-sdk
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -17,21 +19,63 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq openjdk-17-jdk git zip unzip build-essential libssl-dev zlib1g-dev python3-pip python3-dev autoconf libtool pkg-config libncurses5-dev libncursesw5-dev libffi-dev libsqlite3-dev
+          sudo apt-get install -y -qq \
+            openjdk-17-jdk git zip unzip build-essential \
+            libssl-dev zlib1g-dev python3-pip python3-dev \
+            autoconf libtool pkg-config libncurses5-dev libncursesw5-dev \
+            libffi-dev wget curl ant
 
-      - name: Install build toolchain
+      - name: Create Android SDK dir
+        run: |
+          mkdir -p "$ANDROID_HOME"
+
+      - name: Install Android cmdline-tools and SDK packages
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        run: |
+          set -e
+          cd /tmp
+          # Download command line tools (update URL if Google changes it)
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip -d "$ANDROID_HOME"
+          # Normalize layout to cmdline-tools/latest
+          mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+          # Some zips put a 'cmdline-tools' dir containing subdirs; move safely
+          if [ -d "$ANDROID_HOME/cmdline-tools" ]; then
+            # Move everything under cmdline-tools into cmdline-tools/latest (works if zip created a subdir)
+            mv "$ANDROID_HOME"/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/" || true
+          fi
+          # Create a tools/bin symlink so older callers can find sdkmanager at $ANDROID_HOME/tools/bin/sdkmanager
+          mkdir -p "$ANDROID_HOME/tools"
+          ln -s "$ANDROID_HOME/cmdline-tools/latest/bin" "$ANDROID_HOME/tools/bin" || true
+          # Make sdkmanager invocations explicit (PATH update for subsequent steps)
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          # Accept licenses and install essential packages (use explicit path to sdkmanager)
+          export SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-31" "build-tools;33.0.2" "cmdline-tools;latest"
+
+      - name: Install build toolchain (pip)
         run: |
           python3 -m pip install --upgrade pip setuptools wheel
-          pip install buildozer==1.5.0 cython==0.29.37 python-for-android==2023.9.16
+          # pin sh < 2.0 to satisfy python-for-android 2023.9.16 requirement
+          python3 -m pip install 'sh<2.0,>=1.10'
+          python3 -m pip install buildozer==1.5.0 cython==0.29.37 python-for-android==2023.9.16
 
-      - name: Pre-accept SDK licenses
+      - name: Pre-accept SDK licenses (fallback)
         run: |
-          mkdir -p $ANDROID_HOME/licenses
-          echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
-          echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
+          mkdir -p "$ANDROID_HOME/licenses"
+          echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
+          echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
 
       - name: Build APK
-        run: buildozer android debug
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        run: |
+          # Ensure ANDROID_SDK_ROOT is set for Buildozer
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          buildozer android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
