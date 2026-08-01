@@ -36,36 +36,48 @@ jobs:
           mkdir -p "${{ runner.temp }}/android-sdk"
 
       - name: Install Android cmdline-tools and SDK packages
-        env:
-          ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
-        run: |
-          set -euo pipefail
-          SDK_ROOT="${ANDROID_SDK_ROOT}"
-          mkdir -p "$SDK_ROOT"
-          cd /tmp
-          # Download command line tools (update URL if Google changes it)
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip -d "$SDK_ROOT"
-          rm cmdline-tools.zip
-          # Normalize layout to cmdline-tools/latest
-          mkdir -p "$SDK_ROOT/cmdline-tools/latest"
-          if [ -d "$SDK_ROOT/cmdline-tools" ]; then
-            # Move contents if zip expanded into cmdline-tools/
-            mv "$SDK_ROOT/cmdline-tools"/* "$SDK_ROOT/cmdline-tools/latest/" || true
-          fi
-          # Provide old path fallback (tools/bin) used by some scripts
-          mkdir -p "$SDK_ROOT/tools"
-          ln -sfn "$SDK_ROOT/cmdline-tools/latest" "$SDK_ROOT/tools/bin" || true
-          # Add to PATH for this step (and later export to GITHUB_PATH)
-          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$SDK_ROOT/platform-tools" >> $GITHUB_PATH
-          # Accept licenses and install essential packages
-          export SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          # ensure sdkmanager is executable
-          chmod +x "$SDKMANAGER"
-          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platform-tools" "platforms;android-33" "build-tools;33.0.2" "cmdline-tools;latest"
+  env:
+    ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+  run: |
+    set -euo pipefail
+    SDK_ROOT="${ANDROID_SDK_ROOT}"
+    mkdir -p "$SDK_ROOT"
+    cd /tmp
 
+    # Download command line tools
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
+
+    # Unpack into a predictable layout: $SDK_ROOT/cmdline-tools/latest
+    rm -rf "$SDK_ROOT/cmdline-tools"
+    mkdir -p "$SDK_ROOT/cmdline-tools"
+    unzip -q cmdline-tools.zip -d "$SDK_ROOT/cmdline-tools/tmp"
+    # move the contents from tmp/* into latest (handles various zip layouts)
+    mkdir -p "$SDK_ROOT/cmdline-tools/latest"
+    mv "$SDK_ROOT/cmdline-tools/tmp"/* "$SDK_ROOT/cmdline-tools/latest/" || true
+    rm -rf "$SDK_ROOT/cmdline-tools/tmp"
+    rm cmdline-tools.zip
+
+    # Provide old path fallback (tools/bin) used by some scripts
+    mkdir -p "$SDK_ROOT/tools"
+    ln -sfn "$SDK_ROOT/cmdline-tools/latest" "$SDK_ROOT/tools/bin" || true
+
+    # Expose sdkmanager path for this step
+    export SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+    chmod +x "$SDKMANAGER"
+
+    # Ensure JAVA_HOME is set correctly (sdkmanager needs Java)
+    export JAVA_HOME="$(dirname $(dirname $(readlink -f $(which java))))"
+    echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
+
+    # Add to PATH for this step (and later export to GITHUB_PATH)
+    echo "$SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+    echo "$SDK_ROOT/platform-tools" >> $GITHUB_PATH
+
+    # Accept licenses (sdkmanager sometimes exits non-zero even when success; don't let that fail the job)
+    yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses || true
+
+    # Install packages explicitly and fail if install fails
+    "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platform-tools" "platforms;android-33" "build-tools;33.0.2" "cmdline-tools;latest"
       - name: Export Android env vars for Buildozer
         run: |
           echo "ANDROID_SDK_ROOT=${{ runner.temp }}/android-sdk" >> $GITHUB_ENV
